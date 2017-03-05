@@ -1,0 +1,4 @@
+Manifest-Version: 1.0
+Class-Path: tools.jar
+Main-Class: org.rowland.jinix.jjc.Jjc
+
