@@ -110,7 +110,7 @@ public class ls {
     }
 
     private static void displayFileShort(Path fileName) {
-        System.out.println(fileName.toString());
+        System.out.println(fileName.getFileName().toString());
     }
 
     private static void displayFileLong(Path path, CommandLine cmdList) throws IOException {
@@ -121,9 +121,9 @@ public class ls {
         if (cmdList.hasOption('h')) {
             double fl = (double) attr.size();
             if (fl >= GB) {
-                fileLength = String.format("%1$8.2f", (fl/GB)) + "G";
+                fileLength = String.format("%1$9.2f", (fl/GB)) + "G";
             } else if (fl >= MB) {
-                fileLength = String.format("%1$8.2f", (fl/MB)) + "M";
+                fileLength = String.format("%1$9.2f", (fl/MB)) + "M";
             } else if (fl >= KB) {
                 fileLength = String.format("%1$9.2f", (fl/KB)) + "K";
             } else {
@@ -133,7 +133,7 @@ public class ls {
             fileLength = String.format("%1$10d", attr.size());
         }
         System.out.println(String.format("%1$tb %1$td %1$tY  %1$tH:%1$tM:%1$tS ", attr.lastModifiedTime().toMillis()) +
-                fileLength + " " + path.toString());
+                fileLength + " " + path.getFileName().toString());
     }
 
     private static CommandLine parseCommandLineOptions(String[] args) {
