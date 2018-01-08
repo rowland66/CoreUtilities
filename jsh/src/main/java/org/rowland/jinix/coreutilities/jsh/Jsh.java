@@ -4,7 +4,8 @@ import org.rowland.jinix.exec.InvalidExecutableException;
 import org.rowland.jinix.io.*;
 import org.rowland.jinix.lang.JinixRuntime;
 import org.rowland.jinix.lang.JinixSystem;
-import org.rowland.jinix.naming.FileChannel;
+import org.rowland.jinix.lang.ProcessSignalHandler;
+import org.rowland.jinix.proc.ProcessManager;
 
 import java.io.*;
 import java.nio.file.Path;
@@ -19,8 +20,20 @@ public class Jsh {
 
     private static final String INPUT_REDIRECT = "<";
     private static final String OUTPUT_REDIRECT = ">";
+    private static final Set<String> BUILTINS = new HashSet<>(Arrays.asList("exit", "cd", "pwd", "set", "jobs", "fg", "bg"));
+    private static Job currentJob = null;
+    private static Job previousJob = null;
+    private static Job foregroundJob = null;
+    private static JobMap jobMap = new JobMap();
+    private static List<String> promptMessageList = new ArrayList<>(5);
 
     public static void main(String[] args) {
+
+        // Special handling for the console where the shell process will be a process group leader and will not be
+        // allowed to call setProcessSessionId();
+        if (JinixRuntime.getRuntime().getPid() != JinixRuntime.getRuntime().getProcessGroupId()) {
+            JinixRuntime.getRuntime().setProcessSessionId();
+        }
 
         if (args.length > 0) {
             String initDirecotry = args[0];
@@ -33,23 +46,115 @@ public class Jsh {
             }
         }
 
+        // Set up event handler
+        JinixRuntime.getRuntime().registerSignalHandler(new ProcessSignalHandler() {
+            @Override
+            public boolean handleSignal(ProcessManager.Signal signal) {
+                if (signal == ProcessManager.Signal.CHILD) {
+                    ProcessManager.ChildEvent childEvent = JinixRuntime.getRuntime().waitForChild(false);
+                    if (childEvent != null) {
+                        handleChildEvent(childEvent);
+                    }
+                    return true;
+                }
+                if (signal == ProcessManager.Signal.TSTOP) {
+                    if (foregroundJob != null) {
+                        JinixRuntime.getRuntime().sendSignalProcessGroup(foregroundJob.processGroupId, ProcessManager.Signal.STOP);
+                    }
+                    return true;
+                }
+                if (signal == ProcessManager.Signal.TERMINATE) {
+                    if (foregroundJob != null) {
+                        JinixRuntime.getRuntime().sendSignalProcessGroup(foregroundJob.processGroupId, ProcessManager.Signal.TERMINATE);
+                    }
+                }
+                if (signal == ProcessManager.Signal.HANGUP) {
+                    for (Job j : jobMap.jobList()) {
+                        JinixRuntime.getRuntime().sendSignalProcessGroup(j.processGroupId, ProcessManager.Signal.HANGUP);
+                    }
+                    System.exit(0);
+                }
+
+                return false;
+            }
+        });
+
+        JinixRuntime.getRuntime().setForegroundProcessGroupId(JinixRuntime.getRuntime().getProcessGroupId());
+
         try {
             BufferedReader input = new BufferedReader(new InputStreamReader(System.in));
             while(true) {
-                System.out.print(">");
-                System.out.flush();
-                String cmdLine = input.readLine();
-
-                cmdLine = cmdLine.trim();
-                if (cmdLine.isEmpty()) {
-                    continue;
-                }
-
-                Queue<String[]> cmdQueue = LineParser.parse(cmdLine);
                 try {
-                    executeCmd(cmdQueue, null, 0);
-                } catch (CommandExecutionException e) {
-                    System.err.println(e.getMessage());
+                    boolean executeCmdInBackground = false;
+
+                    // Synchronize the output and the clearing of the list so that messages added during signal handling
+                    // are not lost.
+                    synchronized (promptMessageList) {
+                        if (!promptMessageList.isEmpty()) {
+                            for (String promptMessage : promptMessageList) {
+                                System.out.println(promptMessage);
+                            }
+                            promptMessageList.clear();
+                        }
+                    }
+
+                    System.out.print(">");
+                    System.out.flush();
+
+                    //enable child wait interupts here
+                    String cmdLine = input.readLine();
+                    //disable child interrupts here
+
+                    cmdLine = cmdLine.trim();
+                    if (cmdLine.isEmpty()) {
+                        continue;
+                    }
+
+                    if (cmdLine.endsWith("&")) {
+                        cmdLine = cmdLine.substring(0, cmdLine.length() - 1).trim();
+                        executeCmdInBackground = true;
+                    } else {
+                        JinixRuntime.getRuntime().setForegroundProcessGroupId(-1);
+                    }
+
+                    Queue<String[]> cmdQueue = LineParser.parse(cmdLine);
+                    int execJobId = 0;
+                    try {
+                        execJobId = executeCmd(cmdQueue, null, -1, 0, null);
+                    } catch (CommandExecutionException e) {
+                        JinixRuntime.getRuntime().setForegroundProcessGroupId(JinixRuntime.getRuntime().getProcessGroupId());
+                        System.err.println(e.getMessage());
+                        execJobId = e.getJobId();
+                    }
+
+                    if (execJobId > 0 && !executeCmdInBackground || foregroundJob != null) {
+                        if (execJobId > 0) {
+                            foregroundJob = jobMap.getByJobId(execJobId);
+                        }
+
+                        JinixRuntime.getRuntime().setForegroundProcessGroupId(foregroundJob.processGroupId);
+                        while (foregroundJob.isActive()) {
+                            ProcessManager.ChildEvent childEvent = JinixRuntime.getRuntime().waitForChild(false);
+                            handleChildEvent(childEvent);
+                        }
+                        if (foregroundJob.isSuspended()) {
+                            if (foregroundJob != currentJob) {
+                                previousJob = currentJob;
+                                currentJob = foregroundJob;
+                            }
+                        }
+                        foregroundJob = null;
+                    }
+
+                    if (execJobId > 0 && executeCmdInBackground) {
+                        previousJob = currentJob;
+                        currentJob = jobMap.getByJobId(execJobId);
+                    }
+                    JinixRuntime.getRuntime().setForegroundProcessGroupId(JinixRuntime.getRuntime().getProcessGroupId());
+                } catch (IOException e) {
+                    throw e;
+                } catch (Exception e) {
+                    e.printStackTrace();
                 }
             }
         } catch (IOException e) {
@@ -57,7 +162,29 @@ public class Jsh {
         }
     }
 
-    private static void executeCmd(Queue<String[]> cmdQueue, JinixFileDescriptor previousCmdOutput, int executeCmdCnt)
+    private static Job handleChildEvent(ProcessManager.ChildEvent childEvent) {
+        Job j = jobMap.getByProcessGroupId(childEvent.getProcessGroupId());
+        switch (childEvent.getState()) {
+            case SHUTDOWN:
+                j.shutdownProcessCount++;
+                break;
+            case SUSPENDED:
+                j.suspendedProcessCount++;
+                break;
+        }
+        if (j.isSuspended()) {
+            promptMessageList.add(displayJob(j, ""));
+        }
+        if (j.isDone()) {
+            jobMap.removeByProcessGroupId(j.processGroupId);
+            if (j != foregroundJob) {
+                promptMessageList.add(displayJob(j, ""));
+            }
+        }
+        return j;
+    }
+
+    private static int executeCmd(Queue<String[]> cmdQueue, JinixFileDescriptor previousCmdOutput, int processGroupId, int executeCmdCnt, Job job)
             throws CommandExecutionException, RemoteException {
         JinixRuntime runtime = JinixRuntime.getRuntime();
 
@@ -95,53 +222,19 @@ public class Jsh {
             OutputStream cmdError = System.err;
 
             if (cmd.length == 0 || cmd[0].equals("")) {
-                return;
-            }
-            if (cmd[0].equals("exit")) {
-                System.exit(0);
+                return 0;
             }
 
-            if (cmd[0].equals("cd")) {
-                if (cmd.length > 0) {
-                    changeWorkingDirectory(cmd[1]);
+            String expandedCmd = null;
+            boolean builtinCmd = false;
+            if (!BUILTINS.contains(cmd[0])) {
+                expandedCmd = expandCmd(cmd[0], job);
+                if (expandedCmd == null) {
+                    return 0;
                 }
-                return;
-            }
-
-            if (cmd[0].equals("pwd")) {
-                cmdOutput.println(System.getProperty(JinixRuntime.JINIX_ENV_PWD));
-                return;
-            }
-
-            if (cmd[0].equals("set")) {
-                if (cmd.length == 1) {
-                    for (Map.Entry<Object, Object> entry : System.getProperties().entrySet()) {
-                        System.out.println((String)entry.getKey()+"="+(String)entry.getValue());
-                    }
-                    return;
-                }
-
-                String arg=cmd[1].trim();
-                if (!arg.contains("=")) {
-                    System.out.println(cmd[1]+"="+System.getProperty(cmd[1]));
-                    return;
-                }
-                if (arg.indexOf('=') == arg.length()-1) {
-                    JinixSystem.setJinixProperty(arg, null);
-                    return;
-                }
-
-                String[] tokens = arg.split("=");
-                if (tokens.length == 2) {
-                    JinixSystem.setJinixProperty(tokens[0].trim(), tokens[1].trim());
-                    return;
-                }
-                System.err.println("jsh: Error processing set command");
-                return;
-            }
-            cmd[0] = expandCmd(cmd[0]);
-            if (cmd[0] == null) {
-                return;
+            } else {
+                expandedCmd = cmd[0];
+                builtinCmd = true;
             }
 
             ArrayList<String> execArgsList = new ArrayList<String>(cmd.length-1);
@@ -152,9 +245,9 @@ public class Jsh {
                     try {
                         i = parseRedirection(i, cmd, redirectionList);
                     } catch (IOException e) {
-                        throw new CommandExecutionException(cmd[0]+": "+e.getMessage());
+                        throw new CommandExecutionException(cmd[0]+": "+e.getMessage(), (job != null ? job.jobId : 0));
                     } catch (IllegalArgumentException e) {
-                        throw new CommandExecutionException(cmd[0]+": "+e.getMessage());
+                        throw new CommandExecutionException(cmd[0]+": "+e.getMessage(), (job != null ? job.jobId : 0));
                     }
                 } else {
                     execArgsList.add(cmd[i]);
@@ -176,8 +269,37 @@ public class Jsh {
             }
 
             try {
-                runtime.exec(JinixSystem.getJinixProperties(), cmd[0], execArgs,
-                        cmdInputFd, cmdOutputFd, cmdErrorFd);
+                int pid = -1;
+                if (builtinCmd) {
+                    JinixRuntime.getRuntime().setForegroundProcessGroupId(JinixRuntime.getRuntime().getProcessGroupId());
+                    processBuiltins(expandedCmd, execArgs, cmdOutput, cmdError);
+                    if (foregroundJob == null) { // The fg and bg builtins needs special handling because the set the foreground job.
+                        JinixRuntime.getRuntime().setForegroundProcessGroupId(-1);
+                    }
+                } else {
+                    pid = runtime.exec(JinixSystem.getJinixProperties(), expandedCmd, execArgs,
+                            processGroupId, // the first command value of -1 begins a new process group
+                            cmdInputFd, cmdOutputFd, cmdErrorFd);
+                }
+
+                if (processGroupId == -1 && pid > -1) {
+                    if (pid > -1) {
+                        processGroupId = pid;
+                    }
+                }
+
+                if (pid > -1) {
+                    if (job == null) {
+                        job = new Job();
+                        job.processGroupId = processGroupId;
+                        job.cmdArray.add(cmd);
+                        job.pidList.add(pid);
+                        job.jobId = jobMap.add(job);
+                    } else {
+                        job.cmdArray.add(cmd);
+                        job.pidList.add(pid);
+                    }
+                }
 
                 // If we opened any of these file descriptors, we need to close them now since exec()
                 // just duplicated them for the process it started.
@@ -192,31 +314,27 @@ public class Jsh {
                 }
 
                 if (cmdQueue.isEmpty()) {
-                    while (executeCmdCnt > 0) {
-                        runtime.waitForChild();
-                        executeCmdCnt--;
+                    if (pid > -1) {
+                        return job.jobId;
+                    } else {
+                        return -1;
                     }
                 } else {
-                    try {
-                        executeCmd(cmdQueue, cmdOutputPipedInputFd, executeCmdCnt);
-                    } catch (CommandExecutionException e) {
-                        while (executeCmdCnt > 0) {
-                            runtime.waitForChild();
-                            executeCmdCnt--;
-                        }
-                        throw e;
+                    if (pid > -1) {
+                        return executeCmd(cmdQueue, cmdOutputPipedInputFd, processGroupId, executeCmdCnt, job);
+                    } else {
+                        System.err.println("jsh: builtins not supported in jobs");
+                        return -1;
                     }
                 }
             } catch (FileNotFoundException e) {
-                throw new CommandExecutionException("'"+cmd+"' is not recognized as an internal or external command.");
+                throw new CommandExecutionException("'"+cmd[0]+"' is not recognized as an internal or external command.", (job != null ? job.jobId : 0));
             } catch (InvalidExecutableException e) {
-                throw new CommandExecutionException("'"+e.getInvalidFile()+"' is not recognized as an internal or external command.");
+                throw new CommandExecutionException("'"+e.getInvalidFile()+"' is not recognized as an internal or external command.", (job != null ? job.jobId : 0));
             }
         } catch (CommandExecutionException e) {
             executeCmdCnt--;
             throw e;
-        } catch (FileNotFoundException e) {
-            throw new RuntimeException(e); // This should never happen.
         } finally {
             if (previousCmdOutput != null) {
                 try {
@@ -228,7 +346,181 @@ public class Jsh {
         }
     }
 
-    private static String expandCmd(String cmd) throws CommandExecutionException {
+    private static void processBuiltins(String cmd, String[] args, PrintStream cmdOutput, OutputStream cmdError) throws CommandExecutionException {
+        if (cmd.equals("exit")) {
+            System.exit(0);
+        }
+
+        if (cmd.equals("cd")) {
+            if (args.length > 0) {
+                changeWorkingDirectory(args[0]);
+            }
+            return;
+        }
+
+        if (cmd.equals("pwd")) {
+            cmdOutput.println(System.getProperty(JinixRuntime.JINIX_ENV_PWD));
+            return;
+        }
+
+        if (cmd.equals("set")) {
+            if (args.length == 0) {
+                for (Map.Entry<Object, Object> entry : System.getProperties().entrySet()) {
+                    System.out.println((String)entry.getKey()+"="+(String)entry.getValue());
+                }
+                return;
+            }
+
+            String arg=args[0].trim();
+            if (!arg.contains("=")) {
+                System.out.println(cmd+"="+System.getProperty(cmd));
+                return;
+            }
+            if (arg.indexOf('=') == arg.length()-1) {
+                JinixSystem.setJinixProperty(arg, null);
+                return;
+            }
+
+            String[] tokens = arg.split("=");
+            if (tokens.length == 2) {
+                JinixSystem.setJinixProperty(tokens[0].trim(), tokens[1].trim());
+                return;
+            }
+            System.err.println("jsh: Error processing set command");
+            return;
+        }
+
+        if (cmd.equals("jobs")) {
+            String options = "";
+            List<String> jobSpecList = new ArrayList<>(5);
+            for (int i = 0; i < args.length; i++) {
+                if (args[i].startsWith("-") && args[i].length() > 1) {
+                    options = options + args[i].substring(1);
+                } else {
+                    jobSpecList.add(args[i]);
+                }
+            }
+
+            List<Job> jobList = new ArrayList<>(5);
+            if (jobSpecList.isEmpty()) {
+                for (Job j : jobMap.jobList()) {
+                    String jobLine = displayJob(j, options);
+                    if (jobLine != null) {
+                        System.out.println(jobLine);
+                    }
+                }
+            } else {
+                for (String jobSpec : jobSpecList) {
+                    Job j = parseJobSpec(jobSpec);
+                    if (j != null) {
+                        String jobLine = displayJob(j, options);
+                        if (jobLine != null) {
+                            System.out.println(jobLine);
+                        }
+                    } else {
+                        System.err.println("-jsh: jobs: " + jobSpec + ": no such job");
+                    }
+                }
+            }
+            return;
+        }
+
+        if (cmd.equals("fg")) {
+            String jobSpec;
+            if (args.length > 0) {
+                jobSpec = args[0];
+            } else {
+                jobSpec = "%+";
+            }
+            Job j = parseJobSpec(jobSpec);
+
+            if (j == null) {
+                System.err.println("-jsh: fg: "+jobSpec + ": no such job");
+            } else {
+                foregroundJob = j;
+                foregroundJob.suspendedProcessCount = 0;
+                JinixRuntime.getRuntime().setForegroundProcessGroupId(foregroundJob.processGroupId);
+                JinixRuntime.getRuntime().sendSignalProcessGroup(j.processGroupId, ProcessManager.Signal.CONTINUE);
+            }
+            return;
+        }
+
+        if (cmd.equals("bg")) {
+            String jobSpec;
+            if (args.length > 0) {
+                jobSpec = args[0];
+            } else {
+                jobSpec = "%+";
+            }
+            Job j = parseJobSpec(jobSpec);
+
+            if (j == null) {
+                System.err.println("-jsh: bg: "+jobSpec + ": no such job");
+            } else {
+                j.suspendedProcessCount = 0;
+                JinixRuntime.getRuntime().sendSignalProcessGroup(j.processGroupId, ProcessManager.Signal.CONTINUE);
+            }
+            return;
+        }
+    }
+
+    private static String displayJob(Job j, String options) {
+
+        if (options.contains("r") && !j.isActive()) {
+            return null;
+        }
+        if (options.contains("s") && !j.isSuspended()) {
+            return null;
+        }
+        if (options.contains("p")) {
+            System.out.println(j.processGroupId);
+            return null;
+        }
+        String jobIndicator = " ";
+        if (j == currentJob) jobIndicator = "+";
+        if (j == previousJob) jobIndicator = "-";
+
+        String status = "Running";
+        if (j.isDone()) status = "Done";
+        if (j.isSuspended()) status = "Stopped";
+
+        if (options.contains("l")) {
+            return String.format("[%1$d]%5$1s  %4$5d %2$-10s %3$s",
+                    j.jobId,
+                    status,
+                    j.cmdLine(),
+                    j.processGroupId,
+                    jobIndicator);
+        } else {
+            return String.format("[%1$d]%4$1s  %2$-10s %3$s",
+                    j.jobId,
+                    status,
+                    j.cmdLine(),
+                    jobIndicator);
+        }
+    }
+
+    private static Job parseJobSpec(String jobSpec) {
+        Job j = null;
+        try {
+            if (jobSpec.startsWith("%")) {
+                jobSpec = jobSpec.substring(1);
+            }
+            int jobId = Integer.parseInt(jobSpec);
+            j = jobMap.getByJobId(jobId);
+        } catch (NumberFormatException e) {
+            if ((jobSpec.equals("+") || jobSpec.equals("%")) && currentJob != null && jobMap.getByJobId(currentJob.jobId) != null) {
+                j = currentJob;
+            } else if (jobSpec.equals("-") && previousJob != null && jobMap.getByJobId(previousJob.jobId) != null) {
+                j = previousJob;
+            } else {
+                j = jobMap.getByCmdLine(jobSpec);
+            }
+        }
+        return j;
+    }
+
+    private static String expandCmd(String cmd, Job job) throws CommandExecutionException {
 
         String pathExtStr = System.getProperty(JinixRuntime.JINIX_PATH_EXT);
 
@@ -249,7 +541,7 @@ public class Jsh {
             }
 
             if (pathCmd == null) {
-                throw new CommandExecutionException("'"+cmd+"' is not recognized as an internal or external command.");
+                throw new CommandExecutionException("'"+cmd+"' is not recognized as an internal or external command.", (job != null ? job.jobId : 0));
             }
 
             if (pathCmd != null) {
@@ -270,16 +562,16 @@ public class Jsh {
 
         JinixFile newDirectoryFile = new JinixFile(absoluteDirectory.toString());
         if (!newDirectoryFile.exists()) {
-            throw new CommandExecutionException("jsh: cd: " + newDirectoryString + " No such file or directory");
+            throw new CommandExecutionException("jsh: cd: " + newDirectoryString + " No such file or directory", 0);
         }
         if (!newDirectoryFile.isDirectory()) {
-            throw new CommandExecutionException("jsh: cd: "+newDirectoryString+" Not a directory");
+            throw new CommandExecutionException("jsh: cd: "+newDirectoryString+" Not a directory", 0);
         }
 
         try {
             JinixSystem.setJinixProperty(JinixRuntime.JINIX_ENV_PWD, newDirectoryFile.getCanonicalPath());
         } catch (IOException e) {
-            throw new CommandExecutionException("jsh: cd: "+e.getMessage());
+            throw new CommandExecutionException("jsh: cd: "+e.getMessage(), 0);
         }
     }
 
@@ -391,9 +683,46 @@ public class Jsh {
     }
 
     private static class CommandExecutionException extends Exception {
-
-        private CommandExecutionException(String message) {
+        private int jobId;
+        private CommandExecutionException(String message, int jobId) {
             super(message);
+            this.jobId = jobId;
+        }
+
+        int getJobId() {
+            return this.jobId;
+        }
+    }
+
+    static class Job {
+        int processGroupId;
+        int jobId;
+        int suspendedProcessCount;
+        int shutdownProcessCount;
+        List<String[]> cmdArray = new LinkedList<>();
+        List<Integer> pidList = new LinkedList<>();
+
+        boolean isDone() {
+            return (pidList.size() - shutdownProcessCount) == 0;
+        }
+
+        boolean isSuspended() {
+            return !isDone() && (pidList.size() - shutdownProcessCount - suspendedProcessCount) == 0;
+        }
+
+        boolean isActive() {
+            return !isDone() && !isSuspended();
+        }
+
+        String cmdLine() {
+            StringBuilder rtrn = new StringBuilder(64);
+            for (String[] cmd : cmdArray) {
+                if (rtrn.length() > 0) rtrn.append("| ");
+                for (String arg : cmd) {
+                    rtrn.append(arg).append(" ");
+                }
+            }
+            return rtrn.toString();
         }
     }
 }

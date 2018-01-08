@@ -24,6 +24,10 @@ public class Grep {
 
         args = cmdLine.getArgs();
 
+        if (args.length == 0) {
+            return;
+        }
+
         String patternString = args[0];
 
         Pattern pattern = Pattern.compile(patternString);
@@ -44,7 +48,7 @@ public class Grep {
                 JinixFile f = new JinixFile(args[i]);
 
                 try {
-                    is = new BufferedInputStream(new JinixFileInputStream(f));
+                    is = new JinixFileInputStream(f);
                 } catch (FileNotFoundException e) {
                     System.err.println("grep: " + args[i] + ": File not found");
                     continue;

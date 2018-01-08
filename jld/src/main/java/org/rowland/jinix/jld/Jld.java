@@ -155,8 +155,8 @@ public class Jld {
             System.err.println(e.getMessage());
             HelpFormatter formatter = new HelpFormatter();
             formatter.setArgName("[DIRECTORY]...");
-            formatter.printHelp("grep",
-                    "Compile the classes in the given DIRECTORY(s) into an executable jar file",
+            formatter.printHelp("jld",
+                    "Package the classes in the given DIRECTORY(s) into an executable jar file",
                     options,
                     "",
                     true);

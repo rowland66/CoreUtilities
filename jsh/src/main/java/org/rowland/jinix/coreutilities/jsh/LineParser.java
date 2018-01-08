@@ -1,6 +1,9 @@
 package org.rowland.jinix.coreutilities.jsh;
 
+import org.rowland.jinix.lang.JinixRuntime;
+
 import java.util.*;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -28,6 +31,7 @@ public class LineParser {
         char DS = '$';
         char BS = '\\';
         char PIPE = '|';
+        char AMPERSAND = '&';
         char GT = '>';
         char LT = '<';
         char WS = ' ';
@@ -59,7 +63,11 @@ public class LineParser {
                             out += BS + c;
                         }
                     } else if (c == DS) {
-                        out += "BOGUS"; //parseEnvVar();
+                        ParsedVar var = new ParsedVar();
+                        i += parseEnvVar(i, s, var);
+                        if (var.value != null) {
+                            out += var.value;
+                        }
                     } else {
                         out += c;
                     }
@@ -69,11 +77,18 @@ public class LineParser {
             } else if (c == BS) {
                 esc = true;
             } else if (c == DS) {
-                out += "BOGUS";//parseEnvVar();
-            } else if (c == PIPE) {
+                ParsedVar var = new ParsedVar();
+                i += parseEnvVar(i, s, var);
+                if (var.value != null) {
+                    out += var.value;
+                }
+            } else if (c == PIPE || c == AMPERSAND) {
                 if (out.length() > 0) {
                     argList.add(out);
                     out = "";
+                }
+                if (c == AMPERSAND) {
+                    argList.add("&");
                 }
                 String[] rtrn = new String[argList.size()];
                 argList.toArray(rtrn);
@@ -112,8 +127,8 @@ public class LineParser {
         return rtrnStack;
     }
 
-    /*
-    static String parseEnvVar(int i, String s) {
+
+    static int parseEnvVar(int i, String s, ParsedVar v) {
         i += 1;
         int varend;
         String varname;
@@ -127,22 +142,27 @@ public class LineParser {
             if (varend < 0) {
                 throw new RuntimeException("Bad substitution: " + s.substring(i));
             }
-            varname = s.substring(i, varend - i);
+            varname = s.substring(i, varend - 1);
             i = varend;
         } else if (Pattern.matches("[*@#?$!_\\-]", Character.toString(s.charAt(i)))) {
             varname = Character.toString(s.charAt(i));
             i += 1;
         } else {
-            varend = Pattern.matches("[^\\w\\d_]", s.substring(i));
-            if (!varend) {
+            Matcher m  = Pattern.compile("[^\\w\\d_]").matcher(s.substring(i));
+            if (!m.find()) {
                 varname = s.substring(i);
                 i = s.length();
             } else {
-                varname = s.substring(i, varend.index);
-                i += varend.index - 1;
+                varend = m.toMatchResult().start();
+                varname = s.substring(i, varend);
+                i += varend - 1;
             }
         }
-        return getVar(null, '', varname);
-        }
-*/
+        v.value = System.getProperty(varname);
+        return i;
+    }
+
+    private static class ParsedVar {
+        String value;
+    }
 }
