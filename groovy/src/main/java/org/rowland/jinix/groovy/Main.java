@@ -2,6 +2,7 @@ package org.rowland.jinix.groovy;
 
 import groovy.lang.GroovyShell;
 
+import org.apache.commons.cli.*;
 import org.codehaus.groovy.control.CompilationFailedException;
 import org.rowland.jinix.io.JinixFile;
 import org.rowland.jinix.lang.JinixRuntime;
@@ -18,6 +19,11 @@ import java.nio.file.Paths;
 public class Main {
 
     public static void main(String[] args) {
+
+        CommandLine cmdLine = parseCommandLineOptions(args);
+        if (cmdLine == null) return;
+
+        args = cmdLine.getArgs();
 
         if (args.length < 1) {
             System.err.println("groovy: no script file");
@@ -43,4 +49,27 @@ public class Main {
             System.err.println("groovy: IOException: "+e.getMessage());
         }
     }
+
+    private static CommandLine parseCommandLineOptions(String[] args) {
+
+        CommandLineParser parser = new DefaultParser();
+
+        Options options = new Options();
+
+        try {
+            CommandLine cmdLine = parser.parse(options, args);
+            return cmdLine;
+        } catch (ParseException e) {
+            System.err.println(e.getMessage());
+            HelpFormatter formatter = new HelpFormatter();
+            formatter.setArgName("[FILE]...");
+            formatter.printHelp("groovy",
+                    "List information about the FILEs (the current directory by default).",
+                    options,
+                    "",
+                    true);
+            return null;
+        }
+    }
+
 }

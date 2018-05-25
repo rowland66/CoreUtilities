@@ -72,7 +72,6 @@ public class Jsh {
                     for (Job j : jobMap.jobList()) {
                         JinixRuntime.getRuntime().sendSignalProcessGroup(j.processGroupId, ProcessManager.Signal.HANGUP);
                     }
-                    System.exit(0);
                 }
 
                 return false;
@@ -104,6 +103,10 @@ public class Jsh {
                     //enable child wait interupts here
                     String cmdLine = input.readLine();
                     //disable child interrupts here
+
+                    if (cmdLine == null) {
+                        System.exit(0);
+                    }
 
                     cmdLine = cmdLine.trim();
                     if (cmdLine.isEmpty()) {

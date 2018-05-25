@@ -30,7 +30,7 @@ public class GlobUtils {
                     throw new InvalidGlobException("Invalid glob in argument");
                 }
                 if (!name.isEmpty()) {
-                    rtrn.dir.resolve(name);
+                    rtrn.dir = rtrn.dir.resolve(name);
                 }
             }
         }
