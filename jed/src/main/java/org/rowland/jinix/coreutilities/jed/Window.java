@@ -42,7 +42,7 @@ class Window {
         insertPoint = getCurrentLineOffset();
     }
 
-    void exitInsertMode() {
+    void exitInsertMode() throws IOException {
         assert(insertMode == true);
         insertMode = false;
         if (insertBuffer.getText().length() == 0) {
@@ -123,6 +123,9 @@ class Window {
         for (int row=top; row < (scrolledRows); row++) {
             drawRow(row, view.getRowText(row),false);
         }
+        for (int row=bottom; view.getLineIndex(row) == -1; row--) {
+            drawRow(row, view.getRowText(row), true);
+        }
         return scrolledRows;
     }
 
@@ -170,7 +173,12 @@ class Window {
 
     void cursorLeft(int delta) throws IOException {
         if (cursor.getColumn() - delta < left) {
-            cursor = cursor.withColumn(0);
+            int currentRowLineIndex = view.getLineIndex(cursor.getRow());
+            if (view.getLineFirstRow(currentRowLineIndex) < cursor.getRow()) {
+                cursor = cursor.withColumn(right).withRelativeRow(-1);
+            } else {
+                cursor = cursor.withColumn(left);
+            }
         } else {
             cursor = cursor.withRelativeColumn(-delta);
         }
@@ -184,8 +192,11 @@ class Window {
     }
 
     void cursorRight(int delta, boolean safe) throws IOException {
-        if (cursor.getColumn() + delta >= right) {
-            cursor = cursor.withColumn(right);
+        if (cursor.getColumn() + delta > right) {
+            int currentRowLineIndex = view.getLineIndex(cursor.getRow());
+            if (view.getLineLastRow(currentRowLineIndex) > cursor.getRow()) {
+                cursor = cursor.withColumn(left).withRelativeRow(1);
+            }
         } else {
             cursor = cursor.withRelativeColumn(delta);
         }
@@ -213,28 +224,58 @@ class Window {
         return view.getLineOffset(cursor.getRow(), cursor.getColumn());
     }
 
-    void setCurrentLine(Rope value) {
-        view.setLineForRow(cursor.getRow(), value);
+    void setCurrentLine(Rope value) throws IOException {
+        int oldLineRows = view.setLineForRow(cursor.getRow(), value);
+        if (oldLineRows == 0) {
+            refreshCurrentRow();
+            return;
+        }
+        drawScreen(cursor.getRow());
     }
 
     void insertLineAfterCurrentLine(Rope text) throws IOException {
-        view.insertLineAfter(getCurrentLineIndex(), text);
-        Jed.s.scrollLines(cursor.getRow()+1, bottom, -1);
-        cursor = cursor.withRow(cursor.getRow()+1).withColumn(left);
+        int currentLineIndex = getCurrentLineIndex();
+        int insertedTextRows = view.getRowsPerLine(text.length());
+        view.insertLineAfter(currentLineIndex, text);
+        int insertedLineFirstRow = view.getLineFirstRow(currentLineIndex+1); //
+
+        Jed.s.scrollLines(insertedLineFirstRow, bottom, -insertedTextRows);
+        for (int row=bottom; view.getLineIndex(row) == -1; row--) {
+            drawRow(row, view.getRowText(row),true);
+        }
+
+        for (int row=insertedLineFirstRow; row<insertedLineFirstRow+insertedTextRows; row++) {
+            drawRow(row, view.getLineForRow(row), true);
+        }
+        cursor = cursor.withRow(insertedLineFirstRow).withColumn(left);
         Jed.s.setCursorPosition(cursor);
     }
 
     void insertLineBeforeCurrentLine(Rope text) throws IOException {
-        view.insertLineAfter(getCurrentLineIndex()-1, text);
-        Jed.s.scrollLines(cursor.getRow(), bottom, -1);
+        int currentLineIndex = getCurrentLineIndex();
+        int currentLineFirstRow = view.getLineFirstRow(currentLineIndex); //
+        int insertedTextRows = view.getRowsPerLine(text.length());
+        view.insertLineAfter(currentLineIndex-1, text);
+
+        Jed.s.scrollLines(currentLineFirstRow, bottom, -insertedTextRows);
+        for (int row=bottom; view.getLineIndex(row) == -1; row--) {
+            drawRow(row, view.getRowText(row),true);
+        }
+
+        for (int row=currentLineFirstRow; row<currentLineFirstRow+insertedTextRows; row++) {
+            drawRow(row, view.getLineForRow(row), true);
+        }
+
+        cursor = cursor.withRow(currentLineFirstRow).withColumn(left);
         Jed.s.setCursorPosition(cursor);
     }
 
     String deleteCurrentLine() {
+        int blankRows = height - view.getVirtualHeight();
         Rope deleteText = view.deleteLine(getCurrentLineIndex());
-        int deleteRows = Math.floorDiv(deleteText.length(), width) + 1;
-        Jed.s.scrollLines(cursor.getRow(), bottom, deleteRows);
-        for (int row=bottom; row > (bottom-deleteRows); row--) {
+        int deleteRows = view.getRowsPerLine(deleteText.length());
+        Jed.s.scrollLines(cursor.getRow(), bottom-blankRows, deleteRows); // Don't scroll the blank line characters
+        for (int row=bottom; row > (bottom-deleteRows-blankRows); row--) {
             drawRow(row, view.getRowText(row),false);
         }
         if (cursor.getRow() > view.getVirtualHeight()-1) {
@@ -247,12 +288,13 @@ class Window {
 
     void joinCurrentLine() throws IOException{
         Rope joinText = view.deleteLine(getCurrentLineIndex()+1);
-        view.setLineForRow(cursor.getRow(), view.getLineForRow(cursor.getRow()).append(" "+joinText.toString().trim()));
-        int deleteRows = Math.floorDiv(joinText.length(), width) + 1;
+        setCurrentLine(view.getLineForRow(cursor.getRow()).append(" "+joinText.toString().trim()));
+        int deleteRows = view.getRowsPerLine(joinText.length());
         Jed.s.scrollLines(cursor.getRow()+1, bottom, deleteRows);
         for (int row=bottom; row > (bottom-deleteRows); row--) {
             drawRow(row, view.getRowText(row),false);
         }
+
     }
 
     String yankCurrentLine() {
@@ -281,13 +323,27 @@ class Window {
     }
 
     void refreshCurrentRow() throws IOException{
-        drawRow(cursor.getRow(), view.getRowText(cursor.getRow()), true, cursor.getColumn());
-        adjustCursorToLineEnd();
-        Jed.s.setCursorPosition(cursor);
+        int currentRow = cursor.getRow();
+        int startColumn = cursor.getColumn();
+        int lineIndex = view.getLineIndex(currentRow);
+        while (lineIndex == view.getLineIndex(currentRow)) {
+            drawRow(currentRow, view.getRowText(currentRow), true, startColumn);
+            currentRow++;
+            startColumn = 0;
+        }
+
+        if ((currentRow-1) == cursor.getRow()) {
+            adjustCursorToLineEnd();
+            Jed.s.setCursorPosition(cursor);
+        }
     }
 
     void drawScreen() throws IOException {
-        for (int row=0; row<=bottom; row++) {
+        drawScreen(0);
+    }
+
+    void drawScreen(int firstRow) throws IOException {
+        for (int row=firstRow; row<=bottom; row++) {
             drawRow(row, view.getRowText(row), true);
         }
         Jed.s.setCursorPosition(cursor);
@@ -303,24 +359,26 @@ class Window {
             Jed.s.setCharacter(col, row, new TextCharacter(lineData.charAt(col)));
         }
         if (clearExcess) {
-            for ( ; col<right; col++) {
+            for ( ; col<=right; col++) {
                 Jed.s.setCharacter(col, row, Jed.BLANK);
             }
         }
     }
 
     private void adjustCursorToLineEnd() {
-        Rope row = view.getRowText(cursor.getRow());
+        Rope line = view.getRowText(cursor.getRow());
         if (insertMode) {
             return; // in insert mode moving 1 column past the end of the line is allowed.
         }
-        if (cursor.getColumn() >= row.length()) {
+        int currentLineFirstRow = view.getLineFirstRow(view.getLineIndex(cursor.getRow()));
+        int positionInLine = cursor.getRow() - currentLineFirstRow + cursor.getColumn();
+        if (positionInLine >= line.length()) {
             if (virtualColumn == -1) {
                 virtualColumn = cursor.getColumn();
             }
-            cursor = cursor.withColumn((row.length() == 0 ? 0 : row.length()-1));
+            cursor = cursor.withColumn((line.length() == 0 ? 0 : line.length()-1));
         } else if (virtualColumn != -1){
-            cursor = cursor.withColumn(Math.min(virtualColumn, row.length()-1));
+            cursor = cursor.withColumn(Math.min(virtualColumn, line.length()-1));
         }
     }
 
@@ -334,7 +392,7 @@ class Window {
             insertPoint = getCurrentLineOffset();
         }
 
-        void append(Character c) {
+        void append(Character c) throws IOException {
             if (insertTextLength < insertText.length()) {
                 insertText.replace(insertTextLength, insertTextLength+1, Character.toString(c));
             } else {

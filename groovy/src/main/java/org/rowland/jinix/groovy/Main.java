@@ -4,19 +4,24 @@ import groovy.lang.GroovyShell;
 
 import org.apache.commons.cli.*;
 import org.codehaus.groovy.control.CompilationFailedException;
-import org.rowland.jinix.io.JinixFile;
 import org.rowland.jinix.lang.JinixRuntime;
 
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.Reader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * Jinix wrapper around a Groovy shell.
  */
 public class Main {
+
+    private static final String CLASSPATH_SHEBANG = "//!groovy-classpath:";
 
     public static void main(String[] args) {
 
@@ -35,6 +40,9 @@ public class Main {
             if (!Files.exists(scriptPath)) {
                 System.err.println("groovy: no such file: "+scriptPath.toString());
             }
+
+            processGroovyClasspath(scriptPath);
+
             Reader scriptReader = Files.newBufferedReader(scriptPath);
 
             GroovyShell groovy = new GroovyShell();
@@ -72,4 +80,30 @@ public class Main {
         }
     }
 
+    private static void processGroovyClasspath(Path scriptFilePath) {
+        try {
+            BufferedReader scriptReader = Files.newBufferedReader(scriptFilePath);
+            List<String> libraryNames;
+            try {
+                String line = scriptReader.readLine();
+                libraryNames = new ArrayList(16);
+                while (line.startsWith("#!")) {
+                    if (line.startsWith(CLASSPATH_SHEBANG)) {
+                        String classPath = line.substring(CLASSPATH_SHEBANG.length());
+                        String[] lib = classPath.split("\\s");
+                        libraryNames.addAll(Arrays.asList(lib));
+                    }
+                    line = scriptReader.readLine();
+                }
+            } finally {
+                scriptReader.close();
+            }
+
+            for (String jarFile : libraryNames) {
+                JinixRuntime.getRuntime().addLibraryToClassloader(jarFile);
+            }
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
 }

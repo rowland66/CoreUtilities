@@ -9,10 +9,10 @@ import org.ahmadsoft.ropes.RopeBuilder;
  */
 public class EditBufferView {
 
-    private static Rope EMPTY_LINE = (new RopeBuilder()).build("~");
+    private static Rope EMPTY_LINE = (new RopeBuilder()).build("@");
     private EditBuffer buffer;
-    private Object topLineRef;
-    private Object bottomLineRef;
+    private Object topLineRef; //EditBuffer marker for the top visible line
+    private Object bottomLineRef; //EditBuffer marker for the last visible line
     private int width, height;
     private int[] rowLine; // a mapping from the screen row to the buffer line offset
     private int virtualHeight; // the number of rows visible in view. May be less than height if multi-row lines
@@ -47,6 +47,12 @@ public class EditBufferView {
         return lineRope.subSequence((rowLinePos-1)*width, Math.min(rowLinePos*width, lineRope.length()));
     }
 
+    /**
+     * Scroll the edit buffer rows down so that the EditBufferView shows rows earlier in the buffer.
+     *
+     * @param scrollRows
+     * @return
+     */
     int scrollDownRows(int scrollRows) {
         int scrolledRows = 0;
         Object previousTopLineRef = topLineRef;
@@ -55,13 +61,20 @@ public class EditBufferView {
             if (topLineRef.equals(previousTopLineRef)) {
                 break;
             }
-            scrolledRows += Math.floorDiv(buffer.getLine(topLineRef).length(), width) + 1;
+            scrolledRows += getRowsPerLine(buffer.getLine(topLineRef).length());
             previousTopLineRef = topLineRef;
         }
         layout();
         return scrolledRows;
     }
 
+    /**
+     * Scroll the EditBuffer rows down by the given number of lines so that the EditBufferView shows rows earlier in the
+     * file. A line may cover several rows, so this method behaves differently than scrollDownRows().
+     *
+     * @param scrollLines
+     * @return
+     */
     int scrollDown(int scrollLines) {
         int scrolledRows = 0;
         int scrolledLines = 0;
@@ -71,7 +84,7 @@ public class EditBufferView {
             if (topLineRef.equals(previousTopLineRef)) {
                 break;
             }
-            scrolledRows += Math.floorDiv(buffer.getLine(topLineRef).length(), width) + 1;
+            scrolledRows += getRowsPerLine(buffer.getLine(topLineRef).length());
             scrolledLines++;
             previousTopLineRef = topLineRef;
         }
@@ -79,18 +92,29 @@ public class EditBufferView {
         return scrolledRows;
     }
 
+    /**
+     * Scroll the edit buffer rows up so that the EditBufferView shows rows later in the buffer.
+     *
+     * @param scrollRows
+     * @return
+     */
     int scrollUpRows(int scrollRows) {
         int scrolledRows = 0;
         Object previousBottomLineRef = bottomLineRef;
-        while (scrolledRows < scrollRows) {
-            bottomLineRef = buffer.getLineMarker(bottomLineRef, 1);
+        topLineRef = null;
+        while (scrolledRows < scrollRows && topLineRef != buffer.getLineMarker(1)) {
+            topLineRef = buffer.getLineMarker(topLineRef, 1);
+            if (topLineRef == null) {
+                topLineRef = bottomLineRef;
+            }
             if (bottomLineRef.equals(previousBottomLineRef)) {
                 break;
             }
-            scrolledRows += Math.floorDiv(buffer.getLine(bottomLineRef).length(), width) + 1;
+            previousBottomLineRef = bottomLineRef;
+            scrolledRows += getRowsPerLine(buffer.getLine(bottomLineRef).length());
         }
 
-        scrolledRows += setTopLineRef();
+        //scrolledRows += setTopLineRef();
         layout();
         return scrolledRows;
     }
@@ -104,7 +128,7 @@ public class EditBufferView {
             if (bottomLineRef.equals(previousBottomLineRef)) {
                 break;
             }
-            scrolledRows += Math.floorDiv(buffer.getLine(bottomLineRef).length(), width) + 1;
+            scrolledRows += getRowsPerLine(buffer.getLine(bottomLineRef).length());
             scrolledLines++;
         }
 
@@ -137,12 +161,27 @@ public class EditBufferView {
         return buffer.getLine(topLineRef, index);
     }
 
-    void setLineForRow(int row, Rope value) {
+    /**
+     * Replace the line for a row and return the number of rows used by the old line if it differs from the
+     * new line. If the rows required by the line changes, then update the layout.
+     *
+     * @param row
+     * @param value
+     * @return the number rows required by the old line
+     */
+    int setLineForRow(int row, Rope value) {
+        int newLineRows = getRowsPerLine(value.length());
         int index = getLineIndex(row);
         if (index == -1) {
-            return;
+            return 0;
         }
+        int oldLineRows = getRowsPerLine(getLine(index).length());
         buffer.setLine(topLineRef, index, value);
+        if (newLineRows != oldLineRows) {
+            layout();
+            return oldLineRows;
+        }
+        return 0;
     }
 
     int getLineOffset(int row, int column) {
@@ -150,13 +189,13 @@ public class EditBufferView {
         if (line == -1) {
             return -1;
         }
-        int rowLinePos = 1;
+        int rowLinePos = 0;
         while (row > 0 && rowLine[--row] == line) {
             rowLinePos++;
         }
         Rope lineRope = buffer.getLine(topLineRef, line);
 
-        return Math.min((rowLinePos-1)*width + column, lineRope.length());
+        return Math.min((rowLinePos)*width + column, lineRope.length());
     }
 
     int getLineFirstRow(int index) {
@@ -268,7 +307,7 @@ public class EditBufferView {
         topLineRef = bottomLineRef;
         while (rowsRemaining > 0) {
             Rope rope = buffer.getLine(bottomLineRef, lineOffset);
-            int rowsPerLine = Math.floorDiv(rope.length(), width) + 1;
+            int rowsPerLine = getRowsPerLine(rope.length());
             if (rowsPerLine > rowsRemaining) {
                 break;
             }
@@ -292,7 +331,7 @@ public class EditBufferView {
                 rowsRemaining = 0;
                 continue;
             }
-            int rowsPerLine = Math.floorDiv(rope.length(), width) + 1;
+            int rowsPerLine = getRowsPerLine(rope.length());
             if (rowsPerLine > rowsRemaining) {
                 for (int i=0; i<rowsRemaining; i++) {
                     rowLine[currentRow+i] = -1;
@@ -320,5 +359,12 @@ public class EditBufferView {
             i--;
         }
         virtualHeight = height - count;
+    }
+
+    int getRowsPerLine(int characterCount) {
+        if (characterCount == 0) {
+            return 1;
+        }
+        return Math.floorDiv(characterCount, width) + ((characterCount % width) > 0 ? 1 : 0);
     }
 }

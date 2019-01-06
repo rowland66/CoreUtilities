@@ -70,6 +70,7 @@ public class Jed {
                         try {
                             t.realAcquire();
                             s.startScreen();
+                            s.refresh(Screen.RefreshType.COMPLETE);
                         } catch (IOException e) {
                             // Nothing can be done here, so ignore.
                         }
@@ -134,8 +135,6 @@ public class Jed {
                     if (window.insertMode) {
                         if (k.getKeyType() == KeyType.Escape) {
                             window.exitInsertMode();
-                            window.cursorLeft(1);
-                            window.refreshCurrentRow();
                             s.refresh(Screen.RefreshType.DELTA);
                             continue;
                         }
@@ -162,7 +161,6 @@ public class Jed {
                         if (k.getKeyType() == KeyType.Enter && !k.isCtrlDown()) {
                             window.exitInsertMode();
                             window.cursorLeft(1);
-                            window.refreshCurrentRow();
                             window.insertLineAfterCurrentLine(model.getEmptyText());
                             window.enterInsertMode();
                             s.refresh(Screen.RefreshType.DELTA);
@@ -171,7 +169,6 @@ public class Jed {
 
                         if (k.getKeyType() == KeyType.Character && !k.isCtrlDown()) {
                             window.insertBuffer.append(k.getCharacter());
-                            window.refreshCurrentRow();
                             window.cursorRight(1);
                             s.refresh(Screen.RefreshType.DELTA);
                             continue;
@@ -179,7 +176,7 @@ public class Jed {
                     } // Insert Mode
 
                     if (k.getKeyType() == KeyType.Character && k.isCtrlDown()) {
-                        if (k.getCharacter() == 'l') { // move window 1 line downwards
+                        if (k.getCharacter() == 'l') { // refresh the screen
                             window.drawScreen();
                             s.refresh(Screen.RefreshType.COMPLETE);
                             continue;
@@ -264,7 +261,6 @@ public class Jed {
                             int ropePos = window.getCurrentLineOffset();
                             Rope newLine = line.delete(ropePos, ropePos + 1);
                             window.setCurrentLine(newLine);
-                            window.refreshCurrentRow();
                             s.refresh(Screen.RefreshType.DELTA);
                         }
                         continue;
@@ -276,7 +272,6 @@ public class Jed {
                             int ropePos = window.getCurrentLineOffset();
                             Rope newLine = line.delete(ropePos, line.length());
                             window.setCurrentLine(newLine);
-                            window.refreshCurrentRow();
                             s.refresh(Screen.RefreshType.DELTA);
                         }
                         continue;
@@ -331,7 +326,6 @@ public class Jed {
 
                     if (k.getKeyType() == KeyType.Character && k.getCharacter() == 'J') { // join the current line with the next line
                         window.joinCurrentLine();
-                        window.refreshCurrentRow();
                         s.refresh(Screen.RefreshType.DELTA);
                         continue;
                     }
@@ -366,8 +360,8 @@ public class Jed {
                 t.close();
             }
 
-        } catch (Exception e) {
-            e.printStackTrace();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
         }
 
     }
