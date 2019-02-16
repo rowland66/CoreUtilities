@@ -72,7 +72,7 @@ public class Cp {
                     @Override
                     public void accept(Path path) {
                         try {
-                            copyFileInner(path, dest.resolve(path.getFileName()), cmdLine);
+                            copyFileInner(pgr.dir.resolve(path), dest.resolve(path.getFileName()), cmdLine);
                         } catch (IOException e) {
                             throw new RuntimeException(e);
                         }

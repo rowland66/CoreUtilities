@@ -55,12 +55,8 @@ public class SetTrans {
                 return;
             }
 
-            try {
-                JinixRuntime.getRuntime().getRootNamespace().unbindTranslator(
-                        node.toAbsolutePath().toString(), unbindOptions);
-            } catch (RemoteException e) {
-                throw new RuntimeException(e);
-            }
+            JinixRuntime.getRuntime().unbindTranslator(
+                    node.toAbsolutePath().toString(), unbindOptions);
             return;
         }
 
@@ -99,14 +95,12 @@ public class SetTrans {
         String[] bindTransArgs = new String[args.length-2];
         System.arraycopy(args, 2, bindTransArgs, 0, args.length-2);
         try {
-            JinixRuntime.getRuntime().getRootNamespace().bindTranslator(
+            JinixRuntime.getRuntime().bindTranslator(
                     nodePath.toAbsolutePath().toString(), cmd, bindTransArgs, bindOptions);
         } catch (FileNotFoundException e) {
             System.err.println("settrans: translator failed to start no such file: " + cmd);
         } catch (InvalidExecutableException e) {
             System.err.println("settrans: translator failed to start invalid executable: " + cmd);
-        } catch (RemoteException e) {
-            throw new RuntimeException(e);
         }
         return;
     }

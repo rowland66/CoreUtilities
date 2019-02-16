@@ -21,8 +21,7 @@ public class KernelLogLevel {
         args = cmdLine.getArgs();
 
         try {
-            LogServer server =
-                    (LogServer) JinixRuntime.getRuntime().getRootNamespace().lookup(LogServer.SERVER_NAME).remote;
+            LogServer server = (LogServer) JinixRuntime.getRuntime().lookup(LogServer.SERVER_NAME);
             if (cmdLine.hasOption("d") || cmdLine.hasOption("h")) {
                 if (args.length == 1) {
                     try {

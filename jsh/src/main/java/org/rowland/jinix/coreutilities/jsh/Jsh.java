@@ -571,11 +571,7 @@ public class Jsh {
             throw new CommandExecutionException("jsh: cd: "+newDirectoryString+" Not a directory", 0);
         }
 
-        try {
-            JinixSystem.setJinixProperty(JinixRuntime.JINIX_ENV_PWD, newDirectoryFile.getCanonicalPath());
-        } catch (IOException e) {
-            throw new CommandExecutionException("jsh: cd: "+e.getMessage(), 0);
-        }
+        JinixSystem.setJinixProperty(JinixRuntime.JINIX_ENV_PWD, newDirectoryFile.getCanonicalPath());
     }
 
     private static String findCmdInPath(String cmd) {
