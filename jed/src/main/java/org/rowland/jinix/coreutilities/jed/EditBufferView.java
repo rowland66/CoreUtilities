@@ -1,6 +1,6 @@
 package org.rowland.jinix.coreutilities.jed;
 
-import com.googlecode.lanterna.TextCharacter;
+import com.googlecode.lanterna.TerminalPosition;
 import org.ahmadsoft.ropes.Rope;
 import org.ahmadsoft.ropes.RopeBuilder;
 
@@ -11,8 +11,9 @@ public class EditBufferView {
 
     private static Rope EMPTY_LINE = (new RopeBuilder()).build("@");
     private EditBuffer buffer;
-    private Object topLineRef; //EditBuffer marker for the top visible line
-    private Object bottomLineRef; //EditBuffer marker for the last visible line
+    private int topLineIndex; // Index of the top line in the EditBuffer
+    private LineMarker topLineRef; //EditBuffer marker for the top visible line
+    private LineMarker bottomLineRef; //EditBuffer marker for the last visible line
     private int width, height;
     private int[] rowLine; // a mapping from the screen row to the buffer line offset
     private int virtualHeight; // the number of rows visible in view. May be less than height if multi-row lines
@@ -22,9 +23,66 @@ public class EditBufferView {
         buffer = buf;
         this.width = width;
         this.height = height;
+        topLineIndex = 0;
         topLineRef = buffer.getLineMarker(0);
         rowLine = new int[height];
+        buffer.registerChangeListener(new LineChangeListener());
         layout();
+    }
+
+    void setSize(int cols, int rows) {
+        this.width = cols;
+        this.height = rows;
+        this.rowLine = new int[rows];
+        layout();
+    }
+
+    /**
+     * Get the line in the EditBuffer for the given screen row
+     * @param row the screen row
+     * @return
+     */
+    int getRowAbsoluteLine(int row) {
+        int line = rowLine[row];
+        if (line == -1) {
+            return -1;
+        }
+
+        return topLineIndex + line;
+    }
+
+    int getLineIndexAbsoluteLine(int lineIndex) {
+        return topLineIndex + lineIndex;
+    }
+
+    int getPositionLineOffset(int row, int column) {
+        return getPositionLineOffset(row, column, false);
+    }
+
+    /**
+     * Get the position in a line for a given pair of screen coordinates
+     * @param row
+     * @param column
+     * @return
+     */
+    int getPositionLineOffset(int row, int column, boolean insertMode) {
+        int line = rowLine[row];
+        if (line == -1) {
+            return -1;
+        }
+
+        int rowLinePos = row - getLineFirstRow(getLineIndex(row));
+
+        Rope lineRope = buffer.getLine(topLineRef, line);
+
+        return Math.min((rowLinePos)*width + column, Math.max(0, lineRope.length()-(insertMode ? 0 : 1)));
+    }
+
+    TerminalPosition getCursorBasedOnPositionInLine(int lineIndex, int offset) {
+        int row = getLineFirstRow(lineIndex);
+        row += offset / width;
+        int col = offset % width;
+        return new TerminalPosition(col, row);
     }
 
     /**
@@ -47,6 +105,13 @@ public class EditBufferView {
         return lineRope.subSequence((rowLinePos-1)*width, Math.min(rowLinePos*width, lineRope.length()));
     }
 
+    BufferMark getPositionMarker(TerminalPosition cursor) {
+        return new BufferMark(
+                getRowAbsoluteLine(cursor.getRow()),
+                getPositionLineOffset(cursor.getRow(), cursor.getColumn())
+            );
+    }
+
     /**
      * Scroll the edit buffer rows down so that the EditBufferView shows rows earlier in the buffer.
      *
@@ -55,12 +120,13 @@ public class EditBufferView {
      */
     int scrollDownRows(int scrollRows) {
         int scrolledRows = 0;
-        Object previousTopLineRef = topLineRef;
+        LineMarker previousTopLineRef = topLineRef;
         while (scrolledRows < scrollRows) {
             topLineRef = buffer.getLineMarker(topLineRef, -1);
             if (topLineRef.equals(previousTopLineRef)) {
                 break;
             }
+            topLineIndex--;
             scrolledRows += getRowsPerLine(buffer.getLine(topLineRef).length());
             previousTopLineRef = topLineRef;
         }
@@ -78,12 +144,13 @@ public class EditBufferView {
     int scrollDown(int scrollLines) {
         int scrolledRows = 0;
         int scrolledLines = 0;
-        Object previousTopLineRef = topLineRef;
+        LineMarker previousTopLineRef = topLineRef;
         while (scrolledLines < scrollLines) {
             topLineRef = buffer.getLineMarker(topLineRef, -1);
             if (topLineRef.equals(previousTopLineRef)) {
                 break;
             }
+            topLineIndex--;
             scrolledRows += getRowsPerLine(buffer.getLine(topLineRef).length());
             scrolledLines++;
             previousTopLineRef = topLineRef;
@@ -100,40 +167,33 @@ public class EditBufferView {
      */
     int scrollUpRows(int scrollRows) {
         int scrolledRows = 0;
-        Object previousBottomLineRef = bottomLineRef;
-        topLineRef = null;
-        while (scrolledRows < scrollRows && topLineRef != buffer.getLineMarker(1)) {
+        while (scrolledRows < scrollRows && !bottomLineRef.equals(buffer.getLastLineMarker())) {
+            scrolledRows += getRowsPerLine(buffer.getLine(topLineRef).length());
             topLineRef = buffer.getLineMarker(topLineRef, 1);
-            if (topLineRef == null) {
-                topLineRef = bottomLineRef;
-            }
-            if (bottomLineRef.equals(previousBottomLineRef)) {
-                break;
-            }
-            previousBottomLineRef = bottomLineRef;
-            scrolledRows += getRowsPerLine(buffer.getLine(bottomLineRef).length());
+            topLineIndex++;
+            layout();
         }
 
-        //scrolledRows += setTopLineRef();
-        layout();
         return scrolledRows;
     }
 
-    int scrollUp(int scrollLines) {
+    /**
+     * Scroll the next line into view and return number of rows scrolled.
+     * @return
+     */
+    int scrollUp() {
         int scrolledRows = 0;
-        int scrolledLines = 0;
-        Object previousBottomLineRef = bottomLineRef;
-        while (scrolledLines < scrollLines) {
-            bottomLineRef = buffer.getLineMarker(bottomLineRef, 1);
-            if (bottomLineRef.equals(previousBottomLineRef)) {
+        LineMarker previousBottomLineRef = bottomLineRef;
+        while (!bottomLineRef.equals(buffer.getLastLineMarker())) {
+            scrolledRows += getRowsPerLine(buffer.getLine(topLineRef).length());
+            topLineRef = buffer.getLineMarker(topLineRef, 1);
+            topLineIndex++;
+            layout();
+
+            if (!bottomLineRef.equals(previousBottomLineRef)) {
                 break;
             }
-            scrolledRows += getRowsPerLine(buffer.getLine(bottomLineRef).length());
-            scrolledLines++;
         }
-
-        scrolledRows += setTopLineRef();
-        layout();
         return scrolledRows;
     }
 
@@ -158,7 +218,43 @@ public class EditBufferView {
         if (index == -1) {
             return null;
         }
-        return buffer.getLine(topLineRef, index);
+        return getLine(index);
+    }
+
+    LineMarker getLineMarkerForRow(int row) {
+        int index = getLineIndex(row);
+        if (index == -1) {
+            return null;
+        }
+        return getLineMarkerForLineIndex(index);
+    }
+
+    LineMarker getLineMarkerForLineIndex(int lineIndex) {
+        return buffer.getLineMarker(topLineRef, lineIndex);
+    }
+
+    int getLineIndexForLineMarker(LineMarker lineMarker) {
+        int lineIndex = 0;
+        LineMarker marker = topLineRef;
+        while(!marker.equals(bottomLineRef)) {
+            if (marker.equals(lineMarker)) {
+                return lineIndex;
+            }
+            marker = buffer.nextLineMarker(marker);
+            lineIndex++;
+        }
+        if (marker.equals(lineMarker)) {
+            return lineIndex;
+        } else {
+            return -1;
+        }
+    }
+
+    int getRelativeLineIndex(int absoluteLine) {
+        if (isLineVisible(absoluteLine)) {
+            return absoluteLine-topLineIndex;
+        }
+        return -1;
     }
 
     /**
@@ -167,35 +263,32 @@ public class EditBufferView {
      *
      * @param row
      * @param value
-     * @return the number rows required by the old line
+     * @return the number rows required by the old line if different from the new line and no scrolling, or
+     *         -scrolledRows if scrolling was required.
      */
     int setLineForRow(int row, Rope value) {
-        int newLineRows = getRowsPerLine(value.length());
         int index = getLineIndex(row);
-        if (index == -1) {
-            return 0;
+        if (index == -1) { // if row is empty, then
+            index = getLineIndex(row - 1);
         }
-        int oldLineRows = getRowsPerLine(getLine(index).length());
-        buffer.setLine(topLineRef, index, value);
+        return setLine(index, value);
+    }
+
+    int setLine(int lineIndex, Rope value) {
+        int newLineRows = getRowsPerLine(value.length());
+        int oldLineRows = getRowsPerLine(getLine(lineIndex).length());
+        buffer.setLine(topLineRef, lineIndex, value);
         if (newLineRows != oldLineRows) {
+            int lineFirstRow = getLineFirstRow(lineIndex);
+            if (lineFirstRow + newLineRows > height) {
+                int scrolledRows = scrollUpRows(lineFirstRow + newLineRows - height);
+                layout();
+                return -scrolledRows;
+            }
             layout();
             return oldLineRows;
         }
         return 0;
-    }
-
-    int getLineOffset(int row, int column) {
-        int line = rowLine[row];
-        if (line == -1) {
-            return -1;
-        }
-        int rowLinePos = 0;
-        while (row > 0 && rowLine[--row] == line) {
-            rowLinePos++;
-        }
-        Rope lineRope = buffer.getLine(topLineRef, line);
-
-        return Math.min((rowLinePos)*width + column, lineRope.length());
     }
 
     int getLineFirstRow(int index) {
@@ -206,6 +299,16 @@ public class EditBufferView {
             }
         }
         throw new RuntimeException("Invalid row index: "+index);
+    }
+
+    void scrollToAbsoluteLine(int absoluteLine) {
+        scrollToMarker(buffer.getLineMarker(absoluteLine));
+        topLineIndex=absoluteLine;
+    }
+
+    void scrollToMarker(LineMarker marker) {
+        topLineRef = marker;
+        layout();
     }
 
     int getLineLastRow(int index) {
@@ -224,6 +327,21 @@ public class EditBufferView {
             return (i - 1);
         }
         throw new RuntimeException("Invalid row index: "+index);
+    }
+
+    boolean isLineVisible(int lineIndex) {
+        return (lineIndex >= topLineIndex && (lineIndex - topLineIndex) < getVisibleLines());
+    }
+
+    boolean isLineVisible(LineMarker lineMarker) {
+        LineMarker marker = topLineRef;
+        while(!marker.equals(bottomLineRef)) {
+            if (marker.equals(lineMarker)) {
+                return true;
+            }
+            marker = buffer.nextLineMarker(marker);
+        }
+        return marker.equals(lineMarker);
     }
 
     int getLineRowCount(int index) {
@@ -246,24 +364,43 @@ public class EditBufferView {
         throw new RuntimeException("Invalid row index: "+index);
     }
 
-    void insertLineAfter(int lineIndex, Rope text) {
-        Object insertPoint = buffer.getLineMarker(topLineRef, lineIndex);
-        if (insertPoint == null || insertPoint.equals(topLineRef)) { // this means we inserted after the line before the first line
-            buffer.insertFirst(text);
-            topLineRef = buffer.getLineMarker(0);
+    int insertLineAtOffset(int lineOffset, Rope text) {
+        LineMarker insertPoint = buffer.getLineMarker(topLineRef, lineOffset);
+        // if the buffer is empty or we are inserting before the first line
+        if (insertPoint == null) {
+            buffer.insert(text);
         } else {
-            buffer.insertAfter(insertPoint, text);
+            buffer.insertBefore(insertPoint, text);
+            if (lineOffset == 0) {
+                topLineRef = buffer.getLineMarker(topLineRef, -1);
+            }
         }
         layout();
+        if (isLineVisible(topLineIndex+lineOffset)) {
+            return getRowsPerLine(text.length());
+        } else {
+            return 0;
+        }
+
     }
 
     Rope deleteLine(int lineIndex) {
         Rope rtrnValue;
-        Object deletePoint = buffer.getLineMarker(topLineRef, lineIndex-1);
+        LineMarker deletePoint = buffer.getLineMarker(topLineRef, lineIndex-1);
         if (deletePoint.equals(buffer.getLineMarker(topLineRef, lineIndex))) {
             rtrnValue = buffer.deleteFirst();
             topLineRef = buffer.getLineMarker(0);
+            topLineIndex = 0;
         } else {
+            if (lineIndex == 0) {
+                if (topLineRef.equals(buffer.getLastLineMarker())) {
+                    topLineRef = buffer.getLineMarker(topLineRef, -1);
+                    topLineIndex--;
+                } else {
+                    topLineRef = buffer.getLineMarker(topLineRef, 1);
+                    topLineIndex++;
+                }
+            }
             rtrnValue = buffer.deleteAfter(deletePoint);
         }
         layout();
@@ -292,30 +429,6 @@ public class EditBufferView {
             count++;
         }
         return count;
-    }
-
-    /**
-     * When we scroll up, we move the bottomLineRef. This method set the topLineRef, and if the top line is multiple
-     * lines, returns the number of rows to add at the bottom to show a full top line.
-     *
-     * @return
-     */
-    private int setTopLineRef() {
-        int rowsRemaining = height;
-        int lineOffset = 0;
-        int currentRow = 0;
-        topLineRef = bottomLineRef;
-        while (rowsRemaining > 0) {
-            Rope rope = buffer.getLine(bottomLineRef, lineOffset);
-            int rowsPerLine = getRowsPerLine(rope.length());
-            if (rowsPerLine > rowsRemaining) {
-                break;
-            }
-            rowsRemaining -= rowsPerLine;
-            lineOffset--;
-        }
-        topLineRef = buffer.getLineMarker(bottomLineRef, lineOffset+1);
-        return rowsRemaining;
     }
 
     private void layout() {
@@ -354,7 +467,7 @@ public class EditBufferView {
     private void calculateVirtualHeight() {
         int count = 0;
         int i = height-1;
-        while (rowLine[i] == -1) {
+        while (i > -1 && rowLine[i] == -1) {
             count++;
             i--;
         }
@@ -366,5 +479,21 @@ public class EditBufferView {
             return 1;
         }
         return Math.floorDiv(characterCount, width) + ((characterCount % width) > 0 ? 1 : 0);
+    }
+
+    class LineChangeListener implements EditBufferChangeListener {
+        @Override
+        public void addLine(int lineNumber) {
+            if (lineNumber <= topLineIndex) {
+                topLineIndex++;
+            }
+        }
+
+        @Override
+        public void deleteLine(int lineNumber) {
+            if (lineNumber <= topLineIndex) {
+                topLineIndex--;
+            }
+        }
     }
 }

@@ -1,5 +1,10 @@
 package org.rowland.jinix.coreutilities.jsh;
 
+import org.jline.builtins.Completers;
+import org.jline.reader.LineReader;
+import org.jline.reader.impl.LineReaderImpl;
+import org.jline.reader.impl.completer.FileNameCompleter;
+import org.jline.terminal.Terminal;
 import org.rowland.jinix.exec.InvalidExecutableException;
 import org.rowland.jinix.io.*;
 import org.rowland.jinix.lang.JinixRuntime;
@@ -8,6 +13,7 @@ import org.rowland.jinix.lang.ProcessSignalHandler;
 import org.rowland.jinix.proc.ProcessManager;
 
 import java.io.*;
+import java.nio.charset.Charset;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.rmi.RemoteException;
@@ -26,6 +32,7 @@ public class Jsh {
     private static Job foregroundJob = null;
     private static JobMap jobMap = new JobMap();
     private static List<String> promptMessageList = new ArrayList<>(5);
+    private static Terminal term;
 
     public static void main(String[] args) {
 
@@ -44,6 +51,16 @@ public class Jsh {
                 System.err.println("Invalid initial directory: "+initDirecotry);
                 return;
             }
+        }
+
+        LineReader lineReader = null;
+        try {
+            term = new JinixTerminal("Jsh Terminal", "xterm-256color", Charset.defaultCharset(), new TerminalSignalHandler());
+            lineReader = new LineReaderImpl(term);
+            lineReader.setOpt(LineReader.Option.USE_FORWARD_SLASH);
+            ((LineReaderImpl) lineReader).setCompleter(new JinixFileNameCompleter());
+        } catch (IOException e) {
+            System.err.println("jsh: I/O Initializing JLine Terminal");
         }
 
         // Set up event handler
@@ -73,7 +90,9 @@ public class Jsh {
                         JinixRuntime.getRuntime().sendSignalProcessGroup(j.processGroupId, ProcessManager.Signal.HANGUP);
                     }
                 }
-
+                if (signal == ProcessManager.Signal.WINCH) {
+                    term.raise(Terminal.Signal.WINCH);
+                }
                 return false;
             }
         });
@@ -81,7 +100,6 @@ public class Jsh {
         JinixRuntime.getRuntime().setForegroundProcessGroupId(JinixRuntime.getRuntime().getProcessGroupId());
 
         try {
-            BufferedReader input = new BufferedReader(new InputStreamReader(System.in));
             while(true) {
                 try {
                     boolean executeCmdInBackground = false;
@@ -97,11 +115,12 @@ public class Jsh {
                         }
                     }
 
-                    System.out.print(">");
-                    System.out.flush();
+                    //System.out.print(">");
+                    //System.out.flush();
 
                     //enable child wait interupts here
-                    String cmdLine = input.readLine();
+                    String cmdLine = lineReader.readLine(">");
+                    //String cmdLine = input.readLine();
                     //disable child interrupts here
 
                     if (cmdLine == null) {
@@ -600,7 +619,8 @@ public class Jsh {
      * Parse a redirection token. The parsing may consume the next token, so we return the index to
      * continue from in the cmdToken array.
      *
-     * @param redirectionString
+     * @param index
+     * @param cmdToken
      * @param rtrnRedirectionList
      * @throws IOException
      */
@@ -722,6 +742,21 @@ public class Jsh {
                 }
             }
             return rtrn.toString();
+        }
+    }
+
+    private static class TerminalSignalHandler implements Terminal.SignalHandler {
+        @Override
+        public void handle(Terminal.Signal signal) {
+            // The JLine TerminalSignalHandler is not used.
+        }
+    }
+
+    public static class JinixFileNameCompleter extends Completers.FileNameCompleter {
+
+        @Override
+        protected Path getUserDir() {
+            return Paths.get(System.getProperty(JinixRuntime.JINIX_ENV_PWD));
         }
     }
 }

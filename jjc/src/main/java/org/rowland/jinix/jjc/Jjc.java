@@ -14,19 +14,12 @@ public class Jjc {
     public static void main(String[] args) {
 
         String[] newArgs = new String[args.length+6];
-        newArgs[0] = "-endorseddirs";
-        newArgs[1] = "/bin/jdk/lib/endorsed";
-        newArgs[2] = "-bootclasspath";
-        newArgs[3] = "/bin/jdk/jre/lib/resources.jar" + File.pathSeparator +
-            "/bin/jdk/jre/lib/rt.jar" + File.pathSeparator +
-            "/bin/jdk/jre/lib/sunrsasign.jar" + File.pathSeparator +
-            "/bin/jdk/jre/lib/jsse.jar" + File.pathSeparator +
-            "/bin/jdk/jre/lib/jce.jar" + File.pathSeparator +
-            "/bin/jdk/jre/lib/charsets.jar" + File.pathSeparator +
-            "/bin/jdk/jre/lib/jfr.jar";
-        newArgs[4] = "-extdirs";
-        newArgs[5] = "/bin/jdk/jre/lib/ext";
-        //newArgs[6] = "-proc:none";
+        newArgs[0] = "--system";
+        newArgs[1] = "none";
+        newArgs[2] = "--module-path";
+        newArgs[3] = "/lib/jdk/modules";
+        newArgs[4] = "--class-path";
+        newArgs[5] = ".";
         System.arraycopy(args, 0, newArgs, 6, args.length);
         int rtrn = Main.compile(newArgs, new PrintWriter(new OutputStreamWriter(System.out)));
         switch (rtrn) {

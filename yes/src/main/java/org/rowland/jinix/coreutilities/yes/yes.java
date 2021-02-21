@@ -3,7 +3,6 @@ package org.rowland.jinix.coreutilities.yes;
 
 import org.apache.commons.cli.*;
 import org.rowland.jinix.lang.JinixRuntime;
-import org.rowland.jinix.translator.TimeKeeper;
 
 import javax.naming.Context;
 import javax.naming.NamingException;
@@ -20,25 +19,13 @@ public class yes {
         CommandLine cmdLine = parseCommandLineOptions(args);
         if (cmdLine == null) return;
 
-        System.out.println("Start");
+        String value = "y";
+        if (cmdLine.getArgs().length > 0) {
+            value = cmdLine.getArgs()[0];
+        }
 
-        Thread testThread = new Thread(new Runnable() {
-            @Override
-            public void run() {
-                for (int i=0; i<10; i++) {
-                    System.out.println(i);
-                    try {
-                        Thread.sleep(1000);
-                    } catch (InterruptedException e) {
-                        e.printStackTrace();
-                    }
-                }
-            }
-        }, "Test Thread");
-
-        testThread.start();
-
-        System.out.println("Thread started");
+        while (true)
+            System.out.println(value);
 
         /**
         try {

@@ -964,7 +964,7 @@ public class OpenLinkedList<E>
      *
      * @param <E>
      */
-    public static class NodeReference<E> {
+    public static class NodeReference<E> implements LineMarker {
         private Node<E> ref;
         private NodeReference(Node<E> ref) {
             this.ref = ref;
@@ -979,26 +979,30 @@ public class OpenLinkedList<E>
 
         public void setItem(E value) { this.ref.item = value; }
 
-        public void insertAfter(E value) {
-            Node<E> oldNext = this.ref.next;
-            Node<E> newNode = new Node<E>(this.ref, value, oldNext);
-            this.ref.next = newNode;
-            if (oldNext != null) {
-                oldNext.prev = newNode;
-            }
+        public void insertBefore(OpenLinkedList<E> list, E value) {
+            list.linkBefore(value, this.ref);
         }
 
-        public E deleteNext() {
-            Node<E> delObj = this.ref.next;
-            if (delObj != null) {
-                this.ref.next = delObj.next;
-                if (delObj.next != null) {
-                    delObj.next.prev = this.ref;
-                }
-                return delObj.item;
+        public E deleteNext(OpenLinkedList<E> list) {
+            if (this.ref.next != null) {
+                return list.unlink(this.ref.next);
             } else {
                 return null;
             }
+        }
+
+        public NodeReference<E> next() {
+            if (ref.next != null) {
+                return new NodeReference<>(ref.next);
+            }
+            return null;
+        }
+
+        public NodeReference<E> previous() {
+            if (ref.prev != null) {
+                return new NodeReference<>(ref.prev);
+            }
+            return null;
         }
 
         @Override
@@ -1324,6 +1328,12 @@ public class OpenLinkedList<E>
         return new NodeReference<E>(node);
     }
 
+    NodeReference<E> getLastNodeReference() {
+        if (last == null)
+            throw new NoSuchElementException();
+        return new NodeReference<>(last);
+    }
+
     E get(NodeReference<E> ref, int offset) {
         return getNodeReference(ref, offset).getItem();
     }
@@ -1334,5 +1344,7 @@ public class OpenLinkedList<E>
         x.item = element;
         return oldVal;
     }
+
+
 }
 

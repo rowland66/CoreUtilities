@@ -1,5 +1,6 @@
-package org.rowland.jinix.ui;
+package org.rowland.jinix.coreutilities.jed;
 
+import com.googlecode.lanterna.TerminalSize;
 import com.googlecode.lanterna.terminal.ansi.UnixLikeTerminal;
 import org.rowland.jinix.lang.JinixRuntime;
 import org.rowland.jinix.terminal.LocalMode;
@@ -88,5 +89,12 @@ public class JinixTerminal extends UnixLikeTerminal {
     @Override
     protected void keyStrokeSignalsEnabled(boolean enabled) throws IOException {
 
+    }
+
+    @Override
+    protected TerminalSize findTerminalSize() throws IOException {
+        int columns = JinixRuntime.getRuntime().getTerminalColumns();
+        int lines = JinixRuntime.getRuntime().getTerminalLines();
+        return new TerminalSize(columns, lines);
     }
 }

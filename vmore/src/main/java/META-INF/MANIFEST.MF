@@ -1,4 +1,0 @@
-Manifest-Version: 1.0
-Class-Path: lanterna.jar
-Main-Class: org.rowland.jinix.coreutilities.vmore.VMore
-

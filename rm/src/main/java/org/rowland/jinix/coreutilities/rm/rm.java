@@ -111,7 +111,7 @@ public class rm {
             ds.forEach(new Consumer<Path>() {
                 @Override
                 public void accept(Path path) {
-                    deleteFile(dir.toString(), path.toString(), cmdLine);
+                    deleteFile("", path.toString(), cmdLine);
                 }
             });
         } catch (IOException e) {

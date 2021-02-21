@@ -1,4 +1,0 @@
-Manifest-Version: 1.0
-Class-Path: airline-0.8.jar guava-27.0.1.jar javax.inject-1.jar
-Main-Class: org.rowland.jinix.coreutilities.tdump.TDump
-
