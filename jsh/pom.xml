@@ -26,7 +26,7 @@
     <dependency>
       <groupId>org.jline</groupId>
       <artifactId>jline-builtins</artifactId>
-      <version>3.19.0</version>
+      <version>3.30.15</version>
     </dependency>
     <dependency>
       <groupId>org.rowland.jinix</groupId>
